@@ -21,7 +21,7 @@
           prev_hash :: hash(),
           height = 0 :: non_neg_integer(),
           transactions = [] :: [transaction()],
-          magic = 0 :: integer()
+          magic = <<>> :: binary()
          }).
 
 -record(ledger_entry, {

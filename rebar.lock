@@ -23,7 +23,7 @@
  {<<"lager">>,{pkg,<<"lager">>,<<"3.6.1">>},1},
  {<<"libp2p">>,
   {git,"https://github.com/helium/erlang-libp2p.git",
-       {ref,"10c5cb95bffdc22dbe26d72491f1aaa6bd6568dd"}},
+       {ref,"5f0c415d46d0e046743689b513d9ba3f0288562f"}},
   0},
  {<<"multiaddr">>,{pkg,<<"multiaddr">>,<<"1.1.1">>},1},
  {<<"nat_upnp">>,
