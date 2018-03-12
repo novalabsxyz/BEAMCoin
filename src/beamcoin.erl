@@ -63,10 +63,15 @@ status([Node]) ->
     {ok, State} = gen_server:call({?MODULE, Node}, status),
     CurrentHead = maps:get(State#state.blockchain#blockchain.head, State#state.blockchain#blockchain.blocks),
     io:format("Blockchain is of height ~p with head ~s~n", [CurrentHead#block.height, beamcoin_sync_handler:hexdump(hash_block(CurrentHead))]),
-    io:format("Listen addresses are ~p~n", [libp2p_swarm:listen_addrs(State#state.swarm)]),
+    io:format("Listen addresses are ~p~n", [lists:join(", ", libp2p_swarm:listen_addrs(State#state.swarm))]),
     io:format("Miner address is ~s~n", [libp2p_crypto:address_to_b58(State#state.address)]),
     io:format("Ledger~n"),
-    [ io:format("~s has ~p with nonce ~p~n", [libp2p_crypto:address_to_b58(Address), Balance, Nonce]) || {Address, #ledger_entry{nonce=Nonce, balance=Balance}} <- maps:to_list(State#state.blockchain#blockchain.ledger)],
+    riak_core_console_table:print([{address, 50}, {balance, 10}, {nonce, 6}],
+                                  [ [libp2p_crypto:address_to_b58(Address), Balance, Nonce] || {Address, #ledger_entry{nonce=Nonce, balance=Balance}} <- maps:to_list(State#state.blockchain#blockchain.ledger)]),
+    io:format("Peers~n"),
+    Peers = libp2p_peerbook:values(libp2p_swarm:peerbook(State#state.swarm)),
+    Rows = [ [libp2p_crypto:address_to_b58(libp2p_peer:address(Peer)), lists:join("\n", libp2p_peer:listen_addrs(Peer)), lists:join("\n", [libp2p_crypto:address_to_b58(P) || P <- libp2p_peer:connected_peers(Peer)]) ] || Peer <- Peers],
+    riak_core_console_table:print([{address, 50}, {'listening on', 30}, {peers, 50}], Rows),
     ok.
 
 genesis() ->
