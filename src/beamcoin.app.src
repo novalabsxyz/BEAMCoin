@@ -1,0 +1,17 @@
+{application, beamcoin,
+ [
+  {description, "The simplest and worst distributed bitcoin clone"},
+  {vsn, git},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  lager,
+                  libp2p,
+                  ecc_compact,
+                  bitcask,
+                  ranch
+                 ]},
+  {registered, []},
+  {env, []}
+ ]}.
