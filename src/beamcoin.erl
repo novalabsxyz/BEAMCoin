@@ -63,7 +63,7 @@ status([Node]) ->
     {ok, State} = gen_server:call({?MODULE, Node}, status),
     CurrentHead = maps:get(State#state.blockchain#blockchain.head, State#state.blockchain#blockchain.blocks),
     io:format("Blockchain is of height ~p with head ~s~n", [CurrentHead#block.height, beamcoin_sync_handler:hexdump(hash_block(CurrentHead))]),
-    io:format("Listen addresses are ~p~n", [lists:join(", ", libp2p_swarm:listen_addrs(State#state.swarm))]),
+    io:format("Listen addresses are ~s~n", [lists:join(" ", libp2p_swarm:listen_addrs(State#state.swarm))]),
     io:format("Miner address is ~s~n", [libp2p_crypto:address_to_b58(State#state.address)]),
     io:format("Ledger~n"),
     riak_core_console_table:print([{address, 50}, {balance, 10}, {nonce, 6}],
