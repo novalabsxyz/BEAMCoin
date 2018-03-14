@@ -50,7 +50,7 @@
 -behaviour(gen_server).
 
 %% public API
--export([start_link/1, genesis/0, status/1, get_blocks/3, spend/1]).
+-export([start_link/1, genesis/0, status/1, get_blocks/3, spend/1, connect/1]).
 
 %% gen_server API
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -73,6 +73,11 @@ status([Node]) ->
     Rows = [ [libp2p_crypto:address_to_b58(libp2p_peer:address(Peer)), lists:join("\n", libp2p_peer:listen_addrs(Peer)), lists:join("\n", [libp2p_crypto:address_to_b58(P) || P <- libp2p_peer:connected_peers(Peer)]) ] || Peer <- Peers],
     riak_core_console_table:print([{address, 50}, {'listening on', 30}, {peers, 50}], Rows),
     ok.
+
+connect([NodeStr|MultiAddrs]) ->
+    Node = list_to_atom(NodeStr),
+    pong = net_adm:ping(Node),
+    gen_server:cast({?MODULE, Node}, {connect, MultiAddrs}).
 
 genesis() ->
     Name = node(),
@@ -141,6 +146,9 @@ handle_call(_Msg, _From, State) ->
     lager:warning("unhandled call ~p", [_Msg]),
     {reply, ok, State}.
 
+handle_cast({connect, MultiAddrs}, State) ->
+    connect_seed_nodes(MultiAddrs, State#state.swarm),
+    {noreply, State};
 handle_cast(_Msg, State) ->
     lager:warning("unhandled cast ~p", [_Msg]),
     {noreply, State}.
