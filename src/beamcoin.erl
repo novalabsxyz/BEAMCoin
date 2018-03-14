@@ -70,8 +70,8 @@ status([Node]) ->
                                   [ [libp2p_crypto:address_to_b58(Address), Balance, Nonce] || {Address, #ledger_entry{nonce=Nonce, balance=Balance}} <- maps:to_list(State#state.blockchain#blockchain.ledger)]),
     io:format("Peers~n"),
     Peers = libp2p_peerbook:values(libp2p_swarm:peerbook(State#state.swarm)),
-    Rows = [ [libp2p_crypto:address_to_b58(libp2p_peer:address(Peer)), lists:join("\n", libp2p_peer:listen_addrs(Peer)), lists:join("\n", [libp2p_crypto:address_to_b58(P) || P <- libp2p_peer:connected_peers(Peer)]) ] || Peer <- Peers],
-    riak_core_console_table:print([{address, 50}, {'listening on', 30}, {peers, 50}], Rows),
+    Rows = [ [libp2p_crypto:address_to_b58(libp2p_peer:address(Peer)), lists:join("\n", libp2p_peer:listen_addrs(Peer)), lists:join("\n", [libp2p_crypto:address_to_b58(P) || P <- libp2p_peer:connected_peers(Peer)]), erlang:system_time(seconds) - libp2p_peer:timestamp(Peer) ] || Peer <- Peers],
+    riak_core_console_table:print([{address, 50}, {'listening on', 30}, {peers, 50}, {age, 8}], Rows),
     ok.
 
 connect([NodeStr|MultiAddrs]) ->
