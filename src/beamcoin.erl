@@ -217,6 +217,9 @@ handle_info({blocks, Blocks, From}, State) ->
             {noreply, State#state{miner=Miner, mempool=Mempool, blockchain=NewChain#blockchain{ledger=NewLedger, head=NewHash}}};
         _NewLedger ->
             lager:info("got a stale block sync with ~p", [From]),
+            %% send the peer our current head, in response, so they can know to sync with us
+            %% TODO ideally we'd not have to broadcast it
+            catch [ M ! {block, CurrentHead} || M <- pg2:get_members(self())],
             %% the blocks might be useful, stash them since we know they're valid
             Blockchain = State#state.blockchain,
             {noreply, State#state{blockchain=Blockchain#blockchain{blocks=NewChain#blockchain.blocks}}}
