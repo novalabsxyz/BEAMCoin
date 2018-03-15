@@ -167,8 +167,8 @@ handle_info({mined_block, NewBlock, From}, State) ->
         {error, Error} ->
             lager:info("block error ~p ~p", [NewBlock, Error]),
             {noreply, State};
-        NewLedger when CurrentHead#block.height < NewBlock#block.height ->
-            case get_miner(NewBlock) == State#state.address of
+        {NewLedger, ProposedHead} when CurrentHead#block.height < ProposedHead#block.height ->
+            case get_miner(ProposedHead) == State#state.address of
                 true ->
                     lager:info("mined a new block!");
                 false ->
@@ -176,15 +176,15 @@ handle_info({mined_block, NewBlock, From}, State) ->
                     unlink(State#state.miner),
                     exit(State#state.miner, kill)
             end,
-            lager:info("Head is now ~w", [beamcoin_sync_handler:hexdump(hash_block(NewBlock))]),
-            catch [ M ! {block, NewBlock} || M <- pg2:get_members(self())],
-            Mempool = State#state.mempool -- NewBlock#block.transactions,
-            {ok, Miner} = start_mining(NewBlock, State#state.swarm, Mempool),
+            lager:info("Head is now ~w", [beamcoin_sync_handler:hexdump(hash_block(ProposedHead))]),
+            catch [ M ! {block, ProposedHead} || M <- pg2:get_members(self())],
+            Mempool = State#state.mempool -- ProposedHead#block.transactions,
+            {ok, Miner} = start_mining(ProposedHead, State#state.swarm, Mempool),
             Blockchain = State#state.blockchain,
-            NewHash = hash_block(NewBlock),
-            Blocks = maps:put(NewHash, NewBlock, Blockchain#blockchain.blocks),
+            NewHash = hash_block(ProposedHead),
+            Blocks = maps:put(NewHash, ProposedHead, Blockchain#blockchain.blocks),
             {noreply, State#state{miner=Miner, mempool=Mempool, blockchain=Blockchain#blockchain{ledger=NewLedger, head=NewHash, blocks=Blocks}}};
-        _NewLedger ->
+        {_NewLedger, _} ->
             case get_miner(NewBlock) == State#state.address andalso From == self of
                 true ->
                     lager:debug("mined sibling block, ignoring"),
@@ -199,13 +199,12 @@ handle_info({blocks, Blocks, From}, State) ->
     %% speculatively add the blocks to our blockchain and see what we get
     NewChain = add_blocks(Blocks, State#state.blockchain),
     %% Assume the blocks are in ascending order
-    ProposedHead = lists:last(Blocks),
     CurrentHead = maps:get(State#state.blockchain#blockchain.head, State#state.blockchain#blockchain.blocks),
-    case validate_chain(ProposedHead, NewChain) of
+    case validate_chain(lists:last(Blocks), NewChain) of
         {error, Reason} ->
             lager:warning("block sync with ~p failed: ~p", [From, Reason]),
             {noreply, State};
-        NewLedger when CurrentHead#block.height < ProposedHead#block.height ->
+        {NewLedger, ProposedHead} when CurrentHead#block.height < ProposedHead#block.height ->
             lager:info("received a block sync from ~p!", [From]),
             unlink(State#state.miner),
             exit(State#state.miner, kill),
@@ -215,7 +214,7 @@ handle_info({blocks, Blocks, From}, State) ->
             {ok, Miner} = start_mining(ProposedHead, State#state.swarm, Mempool),
             NewHash = hash_block(ProposedHead),
             {noreply, State#state{miner=Miner, mempool=Mempool, blockchain=NewChain#blockchain{ledger=NewLedger, head=NewHash}}};
-        _NewLedger ->
+        {_NewLedger, _} ->
             lager:info("got a stale block sync with ~p", [From]),
             %% send the peer our current head, in response, so they can know to sync with us
             %% TODO ideally we'd not have to broadcast it
@@ -253,6 +252,8 @@ absorb_transactions([], Ledger) ->
     {ok, Ledger};
 absorb_transactions([#coinbase_txn{payee=Address, amount=Amount}|Tail], Ledger) ->
     absorb_transactions(Tail, credit_account(Address, Amount, Ledger));
+absorb_transactions([#payment_txn{amount=Amount}|_Tail], _Ledger) when Amount =< 0 ->
+    {error, bad_transaction};
 absorb_transactions([Txn=#payment_txn{payer=Payer, payee=Payee, amount=Amount, nonce=Nonce, signature=Sig}|Tail], Ledger) ->
     PubKey = libp2p_crypto:address_to_pubkey(Payer),
     case public_key:verify(term_to_binary(Txn#payment_txn{signature= <<>>}), sha256, Sig, PubKey) of
@@ -306,14 +307,19 @@ validate_chain(Block, Blockchain) ->
                             {error, Reason};
                         {ok, Blocks} ->
                             %% attempt to compute a new ledger for this chain
-                            lists:foldl(fun(_Block, {error, _}=Acc) ->
-                                                Acc;
-                                           (ABlock, Ledger) ->
-                                                case absorb_transactions(ABlock#block.transactions, Ledger) of
-                                                    {ok, NewLedger} -> NewLedger;
-                                                    Other -> Other
-                                                end
-                                        end, #{}, Blocks)
+                            try
+                                ValidatedLedger = lists:foldl(fun(_Block, {error, _}=Acc) ->
+                                                                      Acc;
+                                                                 (ABlock, Ledger) ->
+                                                                      case absorb_transactions(ABlock#block.transactions, Ledger) of
+                                                                          {ok, NewLedger} -> NewLedger;
+                                                                          _ -> throw({Ledger, ABlock})
+                                                                      end
+                                                              end, #{}, Blocks),
+                                {ValidatedLedger, Block}
+                            catch
+                                throw:{Ledger, B} -> {Ledger, B}
+                            end
                     end;
                 _ ->
                     {error, incorrect_coinbase_txn}
