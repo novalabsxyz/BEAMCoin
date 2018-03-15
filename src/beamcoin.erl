@@ -313,6 +313,7 @@ validate_chain(Block, Blockchain) ->
                                                                  (ABlock, Ledger) ->
                                                                       case absorb_transactions(ABlock#block.transactions, Ledger) of
                                                                           {ok, NewLedger} -> NewLedger;
+                                                                          %% return the ledger till a "bad block" is found
                                                                           _ -> throw({Ledger, ABlock})
                                                                       end
                                                               end, #{}, Blocks),
