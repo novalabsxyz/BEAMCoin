@@ -81,12 +81,10 @@ connect([NodeStr|MultiAddrs]) ->
 
 genesis() ->
     Name = node(),
-    {ok, Swarm} = libp2p_swarm:start(Name),
-    {_PrivKey, PubKey} = libp2p_swarm:keys(Swarm),
+    {_PrivKey, PubKey} = load_keys(Name),
     Address = libp2p_crypto:pubkey_to_address(PubKey),
     CoinBase = #coinbase_txn{payee=Address, amount=reward_amount(0)},
     NewBlock = #block{prev_hash = <<0:256>>, height=0, transactions=[CoinBase]},
-    libp2p_swarm:stop(Swarm),
     start_miner(NewBlock, self()),
     receive
         {mined_block, Block, self} ->
@@ -111,7 +109,8 @@ start_link([Filename | SeedNodes]) ->
 init([GenesisBlock, SeedNodes]) ->
     Name = node(),
     application:ensure_all_started(ranch),
-    {ok, Swarm} = libp2p_swarm:start(Name),
+    {PrivKey, PubKey} = load_keys(Name),
+    {ok, Swarm} = libp2p_swarm:start(Name, [{key, {PubKey, libp2p_crypto:mk_sig_fun(PrivKey)}}]),
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin/1.0.0", {libp2p_framed_stream, server, [beamcoin_handler, self()]}),
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin_sync/1.0.0", {libp2p_framed_stream, server, [beamcoin_sync_handler, self()]}),
     ok = pg2:create(self()),
@@ -124,7 +123,7 @@ init([GenesisBlock, SeedNodes]) ->
     {ok, Ledger} = absorb_transactions(GenesisBlock#block.transactions, #{}),
     Blockchain = #blockchain{genesis_hash=GenesisHash, blocks=#{GenesisHash => GenesisBlock}, ledger=Ledger, head=GenesisHash},
     {ok, Miner} = start_mining(GenesisBlock, Swarm, []),
-    {_PrivKey, PubKey} = libp2p_swarm:keys(Swarm),
+    {ok, PubKey, _} = libp2p_swarm:keys(Swarm),
     Address = libp2p_crypto:pubkey_to_address(PubKey),
     State = #state{blockchain=Blockchain, swarm=Swarm, miner=Miner, address=Address},
     {ok, State}.
@@ -229,6 +228,16 @@ handle_info(_Msg, State) ->
 
 %% internal functions
 
+load_keys(Name) ->
+    KeyFile = atom_to_list(Name)++".pem",
+    case libp2p_crypto:load_keys(KeyFile) of
+        {ok, PrivKey, PubKey} -> {PrivKey, PubKey};
+        {error, _} ->
+            Keys = {PrivKey, PubKey} = libp2p_crypto:generate_keys(),
+            ok = libp2p_crypto:save_keys(Keys, KeyFile),
+            {PrivKey, PubKey}
+    end.
+
 add_blocks([], Blockchain) ->
     Blockchain;
 add_blocks([Block|Tail], Blockchain=#blockchain{blocks=Blocks}) ->
@@ -285,7 +294,7 @@ debit_account(Address, Amount, Nonce, Ledger) ->
     end.
 
 start_mining(ParentBlock, Swarm, Mempool) ->
-    {_PrivKey, PubKey} = libp2p_swarm:keys(Swarm),
+    {ok, PubKey, _} = libp2p_swarm:keys(Swarm),
     Address = libp2p_crypto:pubkey_to_address(PubKey),
     NextHeight = ParentBlock#block.height + 1,
     CoinBase = #coinbase_txn{payee=Address, amount=reward_amount(NextHeight)},

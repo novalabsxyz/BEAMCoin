@@ -16,6 +16,7 @@ data/
 *.dump
 *.crashdump
 *.block
+*.pem
 GPATH
 GRTAGS
 GTAGS
