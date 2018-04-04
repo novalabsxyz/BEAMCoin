@@ -340,6 +340,7 @@ start_swarm_server(Name, [], {PrivKey, PubKey}) ->
         {key, {PubKey, libp2p_crypto:mk_sig_fun(PrivKey)}}
     ],
     {ok, Swarm} = libp2p_swarm:start(Name, Opts),
+    lager:info("started swarm ~p with ~p", [Swarm, Opts]),
 
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin/1.0.0", {libp2p_framed_stream, server, [beamcoin_handler, self()]}),
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin_sync/1.0.0", {libp2p_framed_stream, server, [beamcoin_sync_handler, self()]}),
@@ -361,6 +362,7 @@ start_swarm_server(Name, SeedNodes, {PrivKey, PubKey}) ->
         ]}
     ],
     {ok, Swarm} = libp2p_swarm:start(Name, Opts),
+    lager:info("started swarm ~p with ~p", [Swarm, Opts]),
 
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin/1.0.0", {libp2p_framed_stream, server, [beamcoin_handler, self()]}),
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin_sync/1.0.0", {libp2p_framed_stream, server, [beamcoin_sync_handler, self()]}),
