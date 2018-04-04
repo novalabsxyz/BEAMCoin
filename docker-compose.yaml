@@ -1,0 +1,22 @@
+version: '3'
+services:
+  beamcoin:
+    build: .
+    image: helium/beamcoin
+    container_name: beamcoin
+    ports:
+        - 8333:8333
+    environment:
+      - PORT=8333
+    volumes:
+      - /tmp/satoshi@127.0.0.1-genesis.block:/opt/beamcoin/satoshi@127.0.0.1-genesis.block
+  miner1:
+    build:
+      context: .
+      dockerfile: Dockerfile-miner
+    image: helium/miner
+    container_name: miner1
+    links:
+      - beamcoin
+    volumes:
+      - /tmp/satoshi@127.0.0.1-genesis.block:/opt/beamcoin/satoshi@127.0.0.1-genesis.block
