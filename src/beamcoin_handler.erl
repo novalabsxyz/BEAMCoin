@@ -1,27 +1,42 @@
+%%%-------------------------------------------------------------------
+%% @doc
+%% == BeamCoin Handler ==
+%% @end
+%%%-------------------------------------------------------------------
 -module(beamcoin_handler).
 
 -behavior(libp2p_framed_stream).
 
--export([init/3, handle_data/3, handle_info/3]).
+%% ------------------------------------------------------------------
+%% libp2p_framed_stream Function Exports
+%% ------------------------------------------------------------------
+-export([
+    init/3
+    ,handle_data/3
+    ,handle_info/3
+]).
 
 -record(state, {
-          parent :: pid(),
-          multiaddr :: string()
-         }).
+    parent :: pid()
+    ,multiaddr :: string()
+}).
 
-init(client, Connection, [Parent]) ->
-    {_, MultiAddr} = libp2p_connection:addr_info(Connection),
+%% ------------------------------------------------------------------
+%% libp2p_framed_stream Function Definitions
+%% ------------------------------------------------------------------
+init(client, Conn, [Parent]) ->
+    {_, MultiAddr} = libp2p_connection:addr_info(Conn),
     ok = pg2:join(Parent, self()),
     {ok, #state{parent=Parent, multiaddr=MultiAddr}};
-init(server, Connection, [_Path, Parent]) ->
-    {_, MultiAddr} = libp2p_connection:addr_info(Connection),
+init(server, Conn, [_Path, Parent]) ->
+    {_, MultiAddr} = libp2p_connection:addr_info(Conn),
     ok = pg2:join(Parent, self()),
     {ok, #state{parent=Parent, multiaddr=MultiAddr}}.
 
-handle_data(_, Data, State=#state{}) ->
+handle_data(_Type, Data, State) ->
     case binary_to_term(Data) of
         {block, Block} ->
-            lager:info("Got block over libp2p"),
+            lager:info("got block over libp2p"),
             State#state.parent ! {mined_block, Block, State#state.multiaddr},
             {noresp, State};
         Other ->

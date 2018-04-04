@@ -1,84 +1,128 @@
+%%%-------------------------------------------------------------------
+%% @doc
+%% == BEAMCoin ==
+%% @end
+%%%-------------------------------------------------------------------
 -module(beamcoin).
-
--type hash() :: <<_:256>>. %% SHA256 digest
-
--record(coinbase_txn, {
-          payee :: libp2p_crypto:address(),
-          amount :: pos_integer()
-         }).
-
--record(payment_txn, {
-          payer :: libp2p_crypto:address(),
-          payee :: libp2p_crypto:address(),
-          amount :: pos_integer(),
-          nonce :: non_neg_integer(),
-          signature :: binary()
-         }).
-
--type transaction() :: #coinbase_txn{} | #payment_txn{}.
-
--record(block, {
-          prev_hash :: hash(),
-          height = 0 :: non_neg_integer(),
-          transactions = [] :: [transaction()],
-          magic = <<>> :: binary()
-         }).
-
--record(ledger_entry, {
-          nonce = 0 :: non_neg_integer(),
-          balance = 0 :: non_neg_integer()
-         }).
-
--record(blockchain, {
-          genesis_hash :: hash(),
-          blocks = #{} :: #{hash() => #block{}},
-          ledger = #{} :: #{libp2p_crypto:address() => #ledger_entry{}},
-          head :: hash()
-         }).
-
--record(state, {
-          blockchain :: #blockchain{},
-          address :: libp2p_crypto:address(),
-          swarm :: pid(),
-          miner :: pid(),
-          mempool = [] :: [#payment_txn{}]
-         }).
-
-%% hard, but not too hard
--define(LIMIT, math:pow(2, 232)).
 
 -behaviour(gen_server).
 
-%% public API
--export([start_link/1, genesis/0, status/1, get_blocks/3, spend/1, connect/1]).
+%% hard, but not too hard
+-define(LIMIT, math:pow(2, 232)).
+-define(SERVER, ?MODULE).
 
-%% gen_server API
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-record(coinbase_txn, {
+    payee :: libp2p_crypto:address()
+    ,amount :: pos_integer()
+}).
 
+-record(payment_txn, {
+    payer :: libp2p_crypto:address()
+    ,payee :: libp2p_crypto:address()
+    ,amount :: pos_integer()
+    ,nonce :: non_neg_integer()
+    ,signature :: binary()
+}).
+
+-type hash() :: <<_:256>>. %% SHA256 digest
+-type transaction() :: #coinbase_txn{} | #payment_txn{}.
+
+-record(block, {
+    prev_hash :: hash()
+    ,height = 0 :: non_neg_integer()
+    ,transactions = [] :: [transaction()]
+    ,magic = <<>> :: binary()
+}).
+
+-record(ledger_entry, {
+    nonce = 0 :: non_neg_integer()
+    ,balance = 0 :: non_neg_integer()
+}).
+
+-record(blockchain, {
+    genesis_hash :: hash()
+    ,blocks = #{} :: #{hash() => #block{}}
+    ,ledger = #{} :: #{libp2p_crypto:address() => #ledger_entry{}}
+    ,head :: hash()
+}).
+
+-record(state, {
+    blockchain :: #blockchain{}
+    ,address :: libp2p_crypto:address()
+    ,swarm :: pid()
+    ,miner :: pid()
+    ,mempool = [] :: [#payment_txn{}]
+}).
+
+%% ------------------------------------------------------------------
+%% API Function Exports
+%% ------------------------------------------------------------------
+-export([
+    start_link/1
+    ,genesis/0
+    ,status/1
+    ,get_blocks/3
+    ,spend/1
+    ,connect/1
+]).
+
+%% ------------------------------------------------------------------
+%% gen_server Function Exports
+%% ------------------------------------------------------------------
+-export([
+    init/1
+    ,handle_call/3
+    ,handle_cast/2
+    ,handle_info/2
+]).
+
+%% ------------------------------------------------------------------
+%% API Function Definitions
+%% ------------------------------------------------------------------
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 get_blocks(Pid, Height, Hash) ->
     gen_server:call(Pid, {get_blocks, Height, Hash}).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 status([Node]) ->
     pong = net_adm:ping(Node),
     {ok, State} = gen_server:call({?MODULE, Node}, status),
     CurrentHead = maps:get(State#state.blockchain#blockchain.head, State#state.blockchain#blockchain.blocks),
-    io:format("Blockchain is of height ~p with head ~s~n", [CurrentHead#block.height, beamcoin_sync_handler:hexdump(hash_block(CurrentHead))]),
-    io:format("Listen addresses are ~s~n", [lists:join(" ", libp2p_swarm:listen_addrs(State#state.swarm))]),
-    io:format("Miner address is ~s~n", [libp2p_crypto:address_to_b58(State#state.address)]),
-    io:format("Ledger~n"),
-    riak_core_console_table:print([{address, 50}, {balance, 10}, {nonce, 6}],
-                                  [ [libp2p_crypto:address_to_b58(Address), Balance, Nonce] || {Address, #ledger_entry{nonce=Nonce, balance=Balance}} <- maps:to_list(State#state.blockchain#blockchain.ledger)]),
-    io:format("Peers~n"),
+    io:format("blockchain is of height ~p with head ~s~n", [CurrentHead#block.height, beamcoin_sync_handler:hexdump(hash_block(CurrentHead))]),
+    io:format("listen addresses are ~s~n", [lists:join(" ", libp2p_swarm:listen_addrs(State#state.swarm))]),
+    io:format("miner address is ~s~n", [libp2p_crypto:address_to_b58(State#state.address)]),
+    io:format("ledger ~n"),
+    riak_core_console_table:print(
+        [{address, 50}, {balance, 10}, {nonce, 6}]
+        ,[[libp2p_crypto:address_to_b58(Address), Balance, Nonce] || {Address, #ledger_entry{nonce=Nonce, balance=Balance}} <- maps:to_list(State#state.blockchain#blockchain.ledger)]
+    ),
+    io:format("peers ~n"),
     Peers = libp2p_peerbook:values(libp2p_swarm:peerbook(State#state.swarm)),
-    Rows = [ [libp2p_crypto:address_to_b58(libp2p_peer:address(Peer)), lists:join("\n", libp2p_peer:listen_addrs(Peer)), lists:join("\n", [libp2p_crypto:address_to_b58(P) || P <- libp2p_peer:connected_peers(Peer)]), erlang:system_time(seconds) - libp2p_peer:timestamp(Peer) ] || Peer <- Peers],
+    Rows = [[libp2p_crypto:address_to_b58(libp2p_peer:address(Peer)), lists:join("\n", libp2p_peer:listen_addrs(Peer)), lists:join("\n", [libp2p_crypto:address_to_b58(P) || P <- libp2p_peer:connected_peers(Peer)]), erlang:system_time(seconds) - libp2p_peer:timestamp(Peer) ] || Peer <- Peers],
     riak_core_console_table:print([{address, 50}, {'listening on', 30}, {peers, 50}, {age, 8}], Rows),
     ok.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 connect([NodeStr|MultiAddrs]) ->
     Node = list_to_atom(NodeStr),
     pong = net_adm:ping(Node),
     gen_server:cast({?MODULE, Node}, {connect, MultiAddrs}).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 genesis() ->
     Name = node(),
     {_PrivKey, PubKey} = load_keys(Name),
@@ -90,16 +134,24 @@ genesis() ->
         {mined_block, Block, self} ->
             Block
     end,
-    file:write_file(atom_to_list(Name)++"-genesis.block", term_to_binary(Block)),
+    file:write_file(erlang:atom_to_list(Name) ++ "-genesis.block", term_to_binary(Block)),
     lager:info("Genesis block ~p", [Block]),
     gen_server:start_link({local, ?MODULE}, ?MODULE, [Block, []], []).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 spend([Node, Amount, Recipient]) ->
     Address = libp2p_crypto:b58_to_address(Recipient),
-    {ok, Txn} = gen_server:call({?MODULE, list_to_atom(Node)}, {spend, list_to_integer(Amount), Address}),
+    {ok, Txn} = gen_server:call({?MODULE, erlang:list_to_atom(Node)}, {spend, erlang:list_to_integer(Amount), Address}),
     io:format("Transaction ~p submitted~n", [Txn]),
     ok.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 start_link([Filename | SeedNodes]=Args) ->
     case file:read_file(Filename) of
         {ok, <<>>} ->
@@ -107,7 +159,7 @@ start_link([Filename | SeedNodes]=Args) ->
             timer:sleep(5000),
             ?MODULE:start_link(Args);
         {ok, Bin} ->
-            try binary_to_term(Bin) of
+            try erlang:binary_to_term(Bin) of
                 GenesisBlock ->
                     case is_record(GenesisBlock, block) of
                         'true' ->
@@ -129,6 +181,9 @@ start_link([Filename | SeedNodes]=Args) ->
             ?MODULE:start_link(Args)
     end.
 
+%% ------------------------------------------------------------------
+%% gen_server Function Definitions
+%% ------------------------------------------------------------------
 
 init([GenesisBlock, SeedNodes]) ->
     Name = node(),
@@ -251,8 +306,14 @@ handle_info(_Msg, State) ->
     lager:warning("unhandled info message ~p", [_Msg]),
     {noreply, State}.
 
-%% internal functions
+%% ------------------------------------------------------------------
+%% Internal Function Definitions
+%% ------------------------------------------------------------------
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 load_keys(Name) ->
     KeyFile = atom_to_list(Name)++".pem",
     case libp2p_crypto:load_keys(KeyFile) of
@@ -263,14 +324,26 @@ load_keys(Name) ->
             {PrivKey, PubKey}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 add_blocks([], Blockchain) ->
     Blockchain;
 add_blocks([Block|Tail], Blockchain=#blockchain{blocks=Blocks}) ->
     add_blocks(Tail, Blockchain#blockchain{blocks=maps:put(hash_block(Block), Block, Blocks)}).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 get_miner(#block{transactions=[#coinbase_txn{payee=Account}|_]}) ->
     Account.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 connect_seed_nodes([], _) ->
     ok;
 connect_seed_nodes([H|SeedNodes], Swarm) ->
@@ -282,6 +355,10 @@ connect_seed_nodes([H|SeedNodes], Swarm) ->
     end,
     connect_seed_nodes(SeedNodes, Swarm).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 absorb_transactions([], Ledger) ->
     {ok, Ledger};
 absorb_transactions([#coinbase_txn{payee=Address, amount=Amount}|Tail], Ledger) ->
@@ -302,12 +379,20 @@ absorb_transactions([Txn=#payment_txn{payer=Payer, payee=Payee, amount=Amount, n
             {error, bad_signature}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 credit_account(_Address, _Amount, error) ->
     error;
 credit_account(Address, Amount, Ledger) ->
     Entry = maps:get(Address, Ledger, #ledger_entry{}),
     maps:put(Address, Entry#ledger_entry{balance = Entry#ledger_entry.balance + Amount}, Ledger).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 debit_account(Address, Amount, Nonce, Ledger) ->
     Entry = maps:get(Address, Ledger, #ledger_entry{}),
     %% check things look OK
@@ -318,6 +403,10 @@ debit_account(Address, Amount, Nonce, Ledger) ->
             error
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 start_mining(ParentBlock, Swarm, Mempool) ->
     {ok, PubKey, _} = libp2p_swarm:keys(Swarm),
     Address = libp2p_crypto:pubkey_to_address(PubKey),
@@ -326,6 +415,10 @@ start_mining(ParentBlock, Swarm, Mempool) ->
     NewBlock = #block{prev_hash=hash_block(ParentBlock), height=NextHeight, transactions=[CoinBase|lists:reverse(Mempool)]},
     start_miner(NewBlock, self()).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 validate_chain(Block, Blockchain) ->
     %% check the hash is under the limit and there's only one coinbase transaction
     <<I:256/integer-unsigned-little>> = hash_block(Block),
@@ -361,9 +454,17 @@ validate_chain(Block, Blockchain) ->
             end
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 hash_block(Block) ->
-    crypto:hash(sha256, term_to_binary(Block)).
+    crypto:hash(sha256, erlang:term_to_binary(Block)).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 parent_blocks([Head|Tail], Blockchain) ->
     Hash = Head#block.prev_hash,
     case maps:find(Hash, Blockchain#blockchain.blocks) of
@@ -379,16 +480,27 @@ parent_blocks([Head|Tail], Blockchain) ->
             parent_blocks([PrevBlock, Head|Tail], Blockchain)
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
 %% Reward amounts start at 2018 and decrement by one every height until they reach 0.
 %% This is to make very clear this is a toy blockchain you should not use for a long time.
+%% @end
+%%--------------------------------------------------------------------
 reward_amount(Height) ->
     max(0, 2018 - Height).
 
+%%--------------------------------------------------------------------
+%% @doc
 %% Mining functions
-
+%% @end
+%%--------------------------------------------------------------------
 start_miner(Block, Parent) ->
     {ok, spawn_link(fun() -> find_magic(Block, Parent) end)}.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 find_magic(Block, Parent) ->
     <<I:256/integer-unsigned-little>> = hash_block(Block),
     case I < ?LIMIT of
