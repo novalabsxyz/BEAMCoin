@@ -13,4 +13,4 @@ fi
 NAME=$1
 shift
 
-erl -name $NAME@127.0.0.1 -pa _build/default/lib/*/ebin -s lager -run beamcoin start_link $@
+erl -name $NAME@127.0.0.1 -config config/sys.config -pa _build/default/lib/*/ebin -s lager -run beamcoin start_link $@

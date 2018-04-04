@@ -12,8 +12,9 @@ RUN rebar3 compile
 
 ## Add / Compule source
 ADD src/ src/
+ADD config/ config/
 RUN rebar3 compile
 
 EXPOSE 8333
 
-CMD erl -noinput -noshell -name satoshi@127.0.0.1 -pa _build/default/lib/*/ebin -s lager -s beamcoin genesis
+CMD erl -noinput -noshell -name satoshi@127.0.0.1 -config config/sys.config -pa _build/default/lib/*/ebin -s lager -s beamcoin genesis
