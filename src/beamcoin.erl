@@ -61,10 +61,12 @@
     ,balance = 0 :: non_neg_integer()
 }).
 
+-type ledger() :: #{libp2p_crypto:address() => #ledger_entry{}}.
+
 -record(blockchain, {
     genesis_hash :: hash()
     ,blocks = #{} :: #{hash() => #block{}}
-    ,ledger = #{} :: #{libp2p_crypto:address() => #ledger_entry{}}
+    ,ledger = #{} :: ledger()
     ,head :: hash()
 }).
 
@@ -78,6 +80,7 @@
 
 -include_lib("public_key/include/public_key.hrl").
 
+-type block() :: #block{}.
 -type private_key() :: #'ECPrivateKey'{}.
 -type public_key() :: {#'ECPoint'{}, {namedCurve, ?secp256r1}}.
 
@@ -119,28 +122,9 @@ status([Node]) ->
 %% @end
 %%--------------------------------------------------------------------
 connect([NodeStr|MultiAddrs]) ->
-    Node = list_to_atom(NodeStr),
+    Node = erlang:list_to_atom(NodeStr),
     pong = net_adm:ping(Node),
     gen_server:cast({?MODULE, Node}, {connect, MultiAddrs}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% @end
-%%--------------------------------------------------------------------
-genesis() ->
-    Name = node(),
-    {_PrivKey, PubKey} = load_keys(Name),
-    Address = libp2p_crypto:pubkey_to_address(PubKey),
-    CoinBase = #coinbase_txn{payee=Address, amount=reward_amount(0)},
-    NewBlock = #block{prev_hash = <<0:256>>, height=0, transactions=[CoinBase]},
-    start_miner(NewBlock, self()),
-    receive
-        {mined_block, Block, self} ->
-            Block
-    end,
-    file:write_file(erlang:atom_to_list(Name) ++ "-genesis.block", term_to_binary(Block)),
-    lager:info("Genesis block ~p", [Block]),
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [Block, []], []).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -151,6 +135,25 @@ spend([Node, Amount, Recipient]) ->
     {ok, Txn} = gen_server:call({?MODULE, erlang:list_to_atom(Node)}, {spend, erlang:list_to_integer(Amount), Address}),
     io:format("transaction ~p submitted ~n", [Txn]),
     ok.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
+genesis() ->
+    Name = erlang:node(),
+    {_PrivKey, PubKey} = load_keys(Name),
+    Address = libp2p_crypto:pubkey_to_address(PubKey),
+    CoinBase = #coinbase_txn{payee=Address, amount=reward_amount(0)},
+    NewBlock = #block{prev_hash = <<0:256>>, height=0, transactions=[CoinBase]},
+    {ok, _Pid} = start_miner(NewBlock, self()),
+    receive
+        {mined_block, Block, self} ->
+            Block
+    end,
+    file:write_file(erlang:atom_to_list(Name) ++ "-genesis.block", erlang:term_to_binary(Block)),
+    lager:info("genesis block ~p", [Block]),
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [Block, []], []).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -366,6 +369,7 @@ connect_seed_nodes([H|SeedNodes], Swarm) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
+-spec absorb_transactions([transaction(), ...], ledger()) -> {ok, ledger()} | {error, bad_transaction | bad_signature}.
 absorb_transactions([], Ledger) ->
     {ok, Ledger};
 absorb_transactions([#coinbase_txn{payee=Address, amount=Amount}|Tail], Ledger) ->
@@ -465,6 +469,7 @@ validate_chain(Block, Blockchain) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
+-spec hash_block(block()) -> binary().
 hash_block(Block) ->
     crypto:hash(sha256, erlang:term_to_binary(Block)).
 
@@ -501,6 +506,7 @@ reward_amount(Height) ->
 %% Mining functions
 %% @end
 %%--------------------------------------------------------------------
+-spec start_miner(block(), pid()) -> {'ok', pid()}.
 start_miner(Block, Parent) ->
     {ok, erlang:spawn_link(fun() -> mine(Block, Parent) end)}.
 
