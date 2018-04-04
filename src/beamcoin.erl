@@ -76,6 +76,11 @@
     ,mempool = [] :: [#payment_txn{}]
 }).
 
+-include_lib("public_key/include/public_key.hrl").
+
+-type private_key() :: #'ECPrivateKey'{}.
+-type public_key() :: {#'ECPoint'{}, {namedCurve, ?secp256r1}}.
+
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
@@ -314,8 +319,10 @@ handle_info(_Msg, State) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
+-spec load_keys(atom()) -> {private_key(), public_key()}.
 load_keys(Name) ->
-    KeyFile = erlang:atom_to_list(Name) ++ ".pem",
+    ok = filelib:ensure_dir("keys/"),
+    KeyFile = "keys/" ++ erlang:atom_to_list(Name) ++ ".pem",
     case libp2p_crypto:load_keys(KeyFile) of
         {ok, PrivKey, PubKey} -> {PrivKey, PubKey};
         {error, _} ->
