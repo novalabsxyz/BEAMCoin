@@ -193,26 +193,33 @@ start_link([Filename | SeedNodes]=Args) ->
 %% ------------------------------------------------------------------
 
 init([GenesisBlock, SeedNodes]) ->
-    Name = node(),
-    Port  = os:getenv("PORT", "0"),
     application:ensure_all_started(ranch),
+
+    % Create swarm / connect to peers
+    Name = erlang:node(),
     {PrivKey, PubKey} = load_keys(Name),
-    {ok, Swarm} = libp2p_swarm:start(Name, [{key, {PubKey, libp2p_crypto:mk_sig_fun(PrivKey)}}]),
-    ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin/1.0.0", {libp2p_framed_stream, server, [beamcoin_handler, self()]}),
-    ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin_sync/1.0.0", {libp2p_framed_stream, server, [beamcoin_sync_handler, self()]}),
-    ok = pg2:create(self()),
-    libp2p_swarm:listen(Swarm, "/ip4/0.0.0.0/tcp/" ++ Port),
-    libp2p_swarm:listen(Swarm, "/ip6/::/tcp/" ++ Port),
-    connect_seed_nodes(SeedNodes, Swarm),
-    %% start mining speculatively
+    Swarm = start_swarm_server(Name, SeedNodes, {PrivKey, PubKey}),
+
     GenesisHash = hash_block(GenesisBlock),
     %% add any transactions in the genesis block to our ledger
     {ok, Ledger} = absorb_transactions(GenesisBlock#block.transactions, #{}),
-    Blockchain = #blockchain{genesis_hash=GenesisHash, blocks=#{GenesisHash => GenesisBlock}, ledger=Ledger, head=GenesisHash},
-    {ok, Miner} = start_mining(GenesisBlock, Swarm, []),
+    Blockchain = #blockchain{
+        genesis_hash=GenesisHash
+        ,blocks=#{GenesisHash => GenesisBlock}
+        ,ledger=Ledger
+        ,head=GenesisHash
+    },
+
     {ok, PubKey, _} = libp2p_swarm:keys(Swarm),
     Address = libp2p_crypto:pubkey_to_address(PubKey),
-    State = #state{blockchain=Blockchain, swarm=Swarm, miner=Miner, address=Address},
+    State = #state{
+        blockchain=Blockchain
+        ,swarm=Swarm
+        ,address=Address
+    },
+
+    self() ! {start_mining, GenesisBlock},
+
     {ok, State}.
 
 handle_call({get_blocks, _Height, _Hash}, _From, State) ->
@@ -233,12 +240,15 @@ handle_call(_Msg, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({connect, MultiAddrs}, State) ->
-    connect_seed_nodes(MultiAddrs, State#state.swarm),
+    ok = connect_seed_nodes(MultiAddrs, State#state.swarm),
     {noreply, State};
 handle_cast(_Msg, State) ->
     lager:warning("unhandled cast ~p", [_Msg]),
     {noreply, State}.
 
+handle_info({start_mining, Block}, #state{swarm=Swarm}=State) ->
+    {ok, Miner} = start_mining(Block, Swarm, []),
+    {noreply, State#state{miner=Miner}};
 handle_info({mined_block, NewBlock, Addr}, State) ->
     CurrentHead = maps:get(State#state.blockchain#blockchain.head, State#state.blockchain#blockchain.blocks),
     case validate_chain(NewBlock, State#state.blockchain) of
@@ -322,6 +332,48 @@ handle_info(_Msg, State) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
+-spec start_swarm_server(atom(), [string(), ...], {private_key(), public_key()}) -> pid().
+start_swarm_server(Name, [], {PrivKey, PubKey}) ->
+    Port = os:getenv("PORT", "0"),
+
+    Opts = [
+        {key, {PubKey, libp2p_crypto:mk_sig_fun(PrivKey)}}
+    ],
+    {ok, Swarm} = libp2p_swarm:start(Name, Opts),
+
+    ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin/1.0.0", {libp2p_framed_stream, server, [beamcoin_handler, self()]}),
+    ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin_sync/1.0.0", {libp2p_framed_stream, server, [beamcoin_sync_handler, self()]}),
+    ok = libp2p_swarm:listen(Swarm, "/ip4/0.0.0.0/tcp/" ++ Port),
+    ok = libp2p_swarm:listen(Swarm, "/ip6/::/tcp/" ++ Port),
+
+    ok = pg2:create(self()),
+    Swarm;
+start_swarm_server(Name, SeedNodes, {PrivKey, PubKey}) ->
+    Port = os:getenv("PORT", "0"),
+
+    Opts = [
+        {key, {PubKey, libp2p_crypto:mk_sig_fun(PrivKey)}}
+        ,{libp2p_group_gossip, [
+            {stream_clients, [
+                {"beamcoin/1.0.0", {beamcoin_handler, [self()]}}
+            ]}
+            ,{seed_nodes, SeedNodes}
+        ]}
+    ],
+    {ok, Swarm} = libp2p_swarm:start(Name, Opts),
+
+    ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin/1.0.0", {libp2p_framed_stream, server, [beamcoin_handler, self()]}),
+    ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin_sync/1.0.0", {libp2p_framed_stream, server, [beamcoin_sync_handler, self()]}),
+    ok = libp2p_swarm:listen(Swarm, "/ip4/0.0.0.0/tcp/" ++ Port),
+    ok = libp2p_swarm:listen(Swarm, "/ip6/::/tcp/" ++ Port),
+
+    ok = pg2:create(self()),
+    Swarm.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 -spec load_keys(atom()) -> {private_key(), public_key()}.
 load_keys(Name) ->
     ok = filelib:ensure_dir("keys/"),
@@ -354,16 +406,17 @@ get_miner(#block{transactions=[#coinbase_txn{payee=Account}|_]}) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
-connect_seed_nodes([], _) ->
+-spec connect_seed_nodes(pid(), [string(), ...]) -> ok.
+connect_seed_nodes(_Swarm, []) ->
     ok;
-connect_seed_nodes([H|SeedNodes], Swarm) ->
-    case libp2p_swarm:dial(Swarm, H, "beamcoin/1.0.0") of
+connect_seed_nodes(Swarm, [Node|Tail]) ->
+    case libp2p_swarm:dial(Swarm, Node, "beamcoin/1.0.0") of
         {ok, Conn} ->
             libp2p_framed_stream:client(beamcoin_handler, Conn, [self()]);
         _ ->
             ok
     end,
-    connect_seed_nodes(SeedNodes, Swarm).
+    connect_seed_nodes(Tail, Swarm).
 
 %%--------------------------------------------------------------------
 %% @doc
