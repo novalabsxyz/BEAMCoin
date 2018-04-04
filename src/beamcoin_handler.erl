@@ -34,7 +34,7 @@ init(server, Conn, [_Path, Parent]) ->
     {ok, #state{parent=Parent, multiaddr=MultiAddr}}.
 
 handle_data(_Type, Data, State) ->
-    case binary_to_term(Data) of
+    case erlang:binary_to_term(Data) of
         {block, Block} ->
             lager:info("got block over libp2p"),
             State#state.parent ! {mined_block, Block, State#state.multiaddr},
@@ -46,7 +46,7 @@ handle_data(_Type, Data, State) ->
 
 handle_info(_, {block, Block}, State) ->
     lager:info("publishing block to network"),
-    {resp, term_to_binary({block, Block}), State};
+    {resp, erlang:term_to_binary({block, Block}), State};
 handle_info(_, Msg, State) ->
     lager:info("p2p handler got unexpected info message ~p", [Msg]),
     {noresp, State}.

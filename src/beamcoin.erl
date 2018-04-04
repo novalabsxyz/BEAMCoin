@@ -11,6 +11,28 @@
 -define(LIMIT, math:pow(2, 232)).
 -define(SERVER, ?MODULE).
 
+%% ------------------------------------------------------------------
+%% API Function Exports
+%% ------------------------------------------------------------------
+-export([
+    start_link/1
+    ,genesis/0
+    ,status/1
+    ,get_blocks/3
+    ,spend/1
+    ,connect/1
+]).
+
+%% ------------------------------------------------------------------
+%% gen_server Function Exports
+%% ------------------------------------------------------------------
+-export([
+    init/1
+    ,handle_call/3
+    ,handle_cast/2
+    ,handle_info/2
+]).
+
 -record(coinbase_txn, {
     payee :: libp2p_crypto:address()
     ,amount :: pos_integer()
@@ -55,31 +77,8 @@
 }).
 
 %% ------------------------------------------------------------------
-%% API Function Exports
-%% ------------------------------------------------------------------
--export([
-    start_link/1
-    ,genesis/0
-    ,status/1
-    ,get_blocks/3
-    ,spend/1
-    ,connect/1
-]).
-
-%% ------------------------------------------------------------------
-%% gen_server Function Exports
-%% ------------------------------------------------------------------
--export([
-    init/1
-    ,handle_call/3
-    ,handle_cast/2
-    ,handle_info/2
-]).
-
-%% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -145,7 +144,7 @@ genesis() ->
 spend([Node, Amount, Recipient]) ->
     Address = libp2p_crypto:b58_to_address(Recipient),
     {ok, Txn} = gen_server:call({?MODULE, erlang:list_to_atom(Node)}, {spend, erlang:list_to_integer(Amount), Address}),
-    io:format("Transaction ~p submitted~n", [Txn]),
+    io:format("transaction ~p submitted ~n", [Txn]),
     ok.
 
 %%--------------------------------------------------------------------
@@ -161,7 +160,7 @@ start_link([Filename | SeedNodes]=Args) ->
         {ok, Bin} ->
             try erlang:binary_to_term(Bin) of
                 GenesisBlock ->
-                    case is_record(GenesisBlock, block) of
+                    case erlang:is_record(GenesisBlock, block) of
                         'true' ->
                             gen_server:start_link({local, ?MODULE}, ?MODULE, [GenesisBlock, SeedNodes], []);
                         _ ->
@@ -232,15 +231,16 @@ handle_cast(_Msg, State) ->
     lager:warning("unhandled cast ~p", [_Msg]),
     {noreply, State}.
 
-handle_info({mined_block, NewBlock, From}, State) ->
+handle_info({mined_block, NewBlock, Addr}, State) ->
     CurrentHead = maps:get(State#state.blockchain#blockchain.head, State#state.blockchain#blockchain.blocks),
     case validate_chain(NewBlock, State#state.blockchain) of
-        {error, {missing_block, _Hash}} when From /= self ->
-            case libp2p_swarm:dial(State#state.swarm, From, "beamcoin_sync/1.0.0/"++integer_to_list(CurrentHead#block.height) ++"/"++ beamcoin_sync_handler:hexdump(hash_block(CurrentHead))) of
+        {error, {missing_block, _Hash}} when Addr /= self ->
+            Path = "beamcoin_sync/1.0.0/" ++ erlang:integer_to_list(CurrentHead#block.height) ++ "/" ++ beamcoin_sync_handler:hexdump(hash_block(CurrentHead)),
+            case libp2p_swarm:dial(State#state.swarm, Addr, Path) of
                 {ok, Conn} ->
                     libp2p_framed_stream:client(beamcoin_sync_handler, Conn, [self()]);
                 Other ->
-                    lager:notice("Failed to dial sync service on ~p : ~p", [From, Other])
+                    lager:notice("Failed to dial sync service on ~p : ~p", [Addr, Other])
             end,
             {noreply, State};
         {error, Error} ->
@@ -252,8 +252,8 @@ handle_info({mined_block, NewBlock, From}, State) ->
                     lager:info("mined a new block!");
                 false ->
                     lager:info("received a new block!"),
-                    unlink(State#state.miner),
-                    exit(State#state.miner, kill)
+                    erlang:unlink(State#state.miner),
+                    erlang:exit(State#state.miner, kill)
             end,
             lager:info("Head is now ~w", [beamcoin_sync_handler:hexdump(hash_block(ProposedHead))]),
             catch [ M ! {block, ProposedHead} || M <- pg2:get_members(self())],
@@ -264,7 +264,7 @@ handle_info({mined_block, NewBlock, From}, State) ->
             Blocks = maps:put(NewHash, ProposedHead, Blockchain#blockchain.blocks),
             {noreply, State#state{miner=Miner, mempool=Mempool, blockchain=Blockchain#blockchain{ledger=NewLedger, head=NewHash, blocks=Blocks}}};
         {_NewLedger, _} ->
-            case get_miner(NewBlock) == State#state.address andalso From == self of
+            case get_miner(NewBlock) == State#state.address andalso Addr == self of
                 true ->
                     lager:debug("mined sibling block, ignoring"),
                     {ok, Miner} = start_mining(NewBlock, State#state.swarm, State#state.mempool),
@@ -315,7 +315,7 @@ handle_info(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 load_keys(Name) ->
-    KeyFile = atom_to_list(Name)++".pem",
+    KeyFile = erlang:atom_to_list(Name) ++ ".pem",
     case libp2p_crypto:load_keys(KeyFile) of
         {ok, PrivKey, PubKey} -> {PrivKey, PubKey};
         {error, _} ->
@@ -495,18 +495,18 @@ reward_amount(Height) ->
 %% @end
 %%--------------------------------------------------------------------
 start_miner(Block, Parent) ->
-    {ok, spawn_link(fun() -> find_magic(Block, Parent) end)}.
+    {ok, erlang:spawn_link(fun() -> mine(Block, Parent) end)}.
 
 %%--------------------------------------------------------------------
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
-find_magic(Block, Parent) ->
+mine(Block, Parent) ->
     <<I:256/integer-unsigned-little>> = hash_block(Block),
     case I < ?LIMIT of
         true ->
             Parent ! {mined_block, Block, self},
             catch [ M ! {block, Block} || M <- pg2:get_members(Parent)];
         false ->
-            find_magic(Block#block{magic=crypto:strong_rand_bytes(16)}, Parent)
+            mine(Block#block{magic=crypto:strong_rand_bytes(16)}, Parent)
     end.
