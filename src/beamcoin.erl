@@ -100,22 +100,47 @@ spend([Node, Amount, Recipient]) ->
     io:format("Transaction ~p submitted~n", [Txn]),
     ok.
 
-start_link([Filename | SeedNodes]) ->
-    {ok, Bin} = file:read_file(Filename),
-    GenesisBlock = binary_to_term(Bin),
-    true = is_record(GenesisBlock, block),
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [GenesisBlock, SeedNodes], []).
+start_link([Filename | SeedNodes]=Args) ->
+    case file:read_file(Filename) of
+        {ok, <<>>} ->
+            lager:warning("fail to start ~p retrying in 5s", ["empty file"]),
+            timer:sleep(5000),
+            ?MODULE:start_link(Args);
+        {ok, Bin} ->
+            try binary_to_term(Bin) of
+                GenesisBlock ->
+                    case is_record(GenesisBlock, block) of
+                        'true' ->
+                            gen_server:start_link({local, ?MODULE}, ?MODULE, [GenesisBlock, SeedNodes], []);
+                        _ ->
+                            lager:warning("fail to start ~p retrying in 5s", ["not block record"]),
+                            timer:sleep(5000),
+                            ?MODULE:start_link(Args)
+                    end
+            catch
+                Error ->
+                    lager:warning("fail to start ~p retrying in 5s", [Error]),
+                    timer:sleep(5000),
+                    ?MODULE:start_link(Args)
+            end;
+        Error ->
+            lager:warning("fail to start ~p retrying in 5s", [Error]),
+            timer:sleep(5000),
+            ?MODULE:start_link(Args)
+    end.
+
 
 init([GenesisBlock, SeedNodes]) ->
     Name = node(),
+    Port  = os:getenv("PORT", "0"),
     application:ensure_all_started(ranch),
     {PrivKey, PubKey} = load_keys(Name),
     {ok, Swarm} = libp2p_swarm:start(Name, [{key, {PubKey, libp2p_crypto:mk_sig_fun(PrivKey)}}]),
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin/1.0.0", {libp2p_framed_stream, server, [beamcoin_handler, self()]}),
     ok = libp2p_swarm:add_stream_handler(Swarm, "beamcoin_sync/1.0.0", {libp2p_framed_stream, server, [beamcoin_sync_handler, self()]}),
     ok = pg2:create(self()),
-    libp2p_swarm:listen(Swarm, "/ip4/0.0.0.0/tcp/0"),
-    libp2p_swarm:listen(Swarm, "/ip6/::/tcp/0"),
+    libp2p_swarm:listen(Swarm, "/ip4/0.0.0.0/tcp/" ++ Port),
+    libp2p_swarm:listen(Swarm, "/ip6/::/tcp/" ++ Port),
     connect_seed_nodes(SeedNodes, Swarm),
     %% start mining speculatively
     GenesisHash = hash_block(GenesisBlock),
