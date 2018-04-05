@@ -8,7 +8,7 @@
 -behaviour(gen_server).
 
 %% hard, but not too hard
--define(LIMIT, math:pow(2, 232)).
+-define(LIMIT, math:pow(2, 240)).
 -define(SERVER, ?MODULE).
 
 %% ------------------------------------------------------------------
@@ -142,48 +142,37 @@ spend([Node, Amount, Recipient]) ->
 %%--------------------------------------------------------------------
 genesis() ->
     Name = erlang:node(),
-    {_PrivKey, PubKey} = load_keys(Name),
-    Address = libp2p_crypto:pubkey_to_address(PubKey),
-    CoinBase = #coinbase_txn{payee=Address, amount=reward_amount(0)},
-    NewBlock = #block{prev_hash = <<0:256>>, height=0, transactions=[CoinBase]},
-    {ok, _Pid} = start_miner(NewBlock, self()),
-    receive
-        {mined_block, Block, self} ->
-            Block
+    FileName = erlang:atom_to_list(Name) ++ "-genesis.block",
+    NewBlock = case load_genesis_block(FileName) of
+        {ok, GenesisBlock} ->
+            GenesisBlock;
+        {error, _E} ->
+            lager:info("could not load a genesis block: ~p, creating instead", [_E]),
+            {_PrivKey, PubKey} = load_keys(Name),
+            Address = libp2p_crypto:pubkey_to_address(PubKey),
+            CoinBase = #coinbase_txn{payee=Address, amount=reward_amount(0)},
+            Block = #block{prev_hash = <<0:256>>, height=0, transactions=[CoinBase]},
+            {ok, _Pid} = start_miner(Block, self()),
+            lager:info("mining genesis block"),
+            receive
+                {mined_block, MinedBlock, self} ->
+                    ok = file:write_file(FileName, erlang:term_to_binary(MinedBlock)),
+                    MinedBlock
+            end
     end,
-    file:write_file(erlang:atom_to_list(Name) ++ "-genesis.block", erlang:term_to_binary(Block)),
-    lager:info("genesis block ~p", [Block]),
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [Block, []], []).
+    lager:info("genesis block ~p", [NewBlock]),
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [NewBlock, []], []).
 
 %%--------------------------------------------------------------------
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
-start_link([Filename | SeedNodes]=Args) ->
-    case file:read_file(Filename) of
-        {ok, <<>>} ->
-            lager:warning("fail to start ~p retrying in 5s", ["empty file"]),
-            timer:sleep(5000),
-            ?MODULE:start_link(Args);
-        {ok, Bin} ->
-            try erlang:binary_to_term(Bin) of
-                GenesisBlock ->
-                    case erlang:is_record(GenesisBlock, block) of
-                        'true' ->
-                            gen_server:start_link({local, ?MODULE}, ?MODULE, [GenesisBlock, SeedNodes], []);
-                        _ ->
-                            lager:warning("fail to start ~p retrying in 5s", ["not block record"]),
-                            timer:sleep(5000),
-                            ?MODULE:start_link(Args)
-                    end
-            catch
-                Error ->
-                    lager:warning("fail to start ~p retrying in 5s", [Error]),
-                    timer:sleep(5000),
-                    ?MODULE:start_link(Args)
-            end;
-        Error ->
-            lager:warning("fail to start ~p retrying in 5s", [Error]),
+start_link([FileName | SeedNodes]=Args) ->
+    case load_genesis_block(FileName) of
+        {ok, GenesisBlock} ->
+            gen_server:start_link({local, ?MODULE}, ?MODULE, [GenesisBlock, SeedNodes], []);
+        {error, _E} ->
+            lager:warning("fail to start ~p retrying in 5s", [_E]),
             timer:sleep(5000),
             ?MODULE:start_link(Args)
     end.
@@ -239,9 +228,6 @@ handle_call(_Msg, _From, State) ->
     lager:warning("unhandled call ~p", [_Msg]),
     {reply, ok, State}.
 
-handle_cast({connect, MultiAddrs}, State) ->
-    ok = connect_seed_nodes(MultiAddrs, State#state.swarm),
-    {noreply, State};
 handle_cast(_Msg, State) ->
     lager:warning("unhandled cast ~p", [_Msg]),
     {noreply, State}.
@@ -332,6 +318,32 @@ handle_info(_Msg, State) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
+-spec load_genesis_block(string()) -> {ok, block()} | {error, any()}.
+load_genesis_block(FileName) ->
+    case file:read_file(FileName) of
+        {ok, <<>>} ->
+            {error, empty_file};
+        {ok, Bin} ->
+            try erlang:binary_to_term(Bin) of
+                GenesisBlock ->
+                    case erlang:is_record(GenesisBlock, block) of
+                        true ->
+                            {ok, GenesisBlock};
+                        _ ->
+                            {error, not_record}
+                    end
+            catch
+                Error ->
+                    {error, Error}
+            end;
+        Error ->
+            Error
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 -spec start_swarm_server(atom(), [string(), ...], {private_key(), public_key()}) -> pid().
 start_swarm_server(Name, [], {PrivKey, PubKey}) ->
     Port = os:getenv("PORT", "0"),
@@ -403,22 +415,6 @@ add_blocks([Block|Tail], Blockchain=#blockchain{blocks=Blocks}) ->
 %%--------------------------------------------------------------------
 get_miner(#block{transactions=[#coinbase_txn{payee=Account}|_]}) ->
     Account.
-
-%%--------------------------------------------------------------------
-%% @doc
-%% @end
-%%--------------------------------------------------------------------
--spec connect_seed_nodes(pid(), [string(), ...]) -> ok.
-connect_seed_nodes(_Swarm, []) ->
-    ok;
-connect_seed_nodes(Swarm, [Node|Tail]) ->
-    case libp2p_swarm:dial(Swarm, Node, "beamcoin/1.0.0") of
-        {ok, Conn} ->
-            libp2p_framed_stream:client(beamcoin_handler, Conn, [self()]);
-        _ ->
-            ok
-    end,
-    connect_seed_nodes(Tail, Swarm).
 
 %%--------------------------------------------------------------------
 %% @doc
