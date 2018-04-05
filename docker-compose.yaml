@@ -4,19 +4,35 @@ services:
     build: .
     image: helium/beamcoin
     container_name: beamcoin
-    ports:
-        - 8333:8333
     environment:
       - PORT=8333
+      - NAME=beamcoin
+      - GENESIS=true
+    networks:
+      beamcoinnet:
+        ipv4_address: 10.5.0.2
     volumes:
-      - /tmp/satoshi@127.0.0.1-genesis.block:/opt/beamcoin/satoshi@127.0.0.1-genesis.block
+      - /tmp/beamcoin@127.0.0.1-genesis.block:/opt/beamcoin/beamcoin@127.0.0.1-genesis.block
   miner1:
-    build:
-      context: .
-      dockerfile: Dockerfile-miner
-    image: helium/miner
+    build: .
+    image: helium/beamcoin
     container_name: miner1
+    environment:
+      - PORT=8333
+      - NAME=miner1
+      - PEERS=/ip4/10.5.0.2/tcp/8333
+      - GENESIS_BLOCK=beamcoin@127.0.0.1-genesis.block
+    networks:
+      beamcoinnet:
+        ipv4_address: 10.5.0.3
     links:
       - beamcoin
     volumes:
-      - /tmp/satoshi@127.0.0.1-genesis.block:/opt/beamcoin/satoshi@127.0.0.1-genesis.block
+      - /tmp/beamcoin@127.0.0.1-genesis.block:/opt/beamcoin/beamcoin@127.0.0.1-genesis.block
+
+networks:
+  beamcoinnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
