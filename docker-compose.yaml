@@ -1,0 +1,73 @@
+version: '3'
+services:
+  miner2:
+    build: .
+    image: helium/beamcoin
+    container_name: miner2
+    environment:
+      - PORT=8333
+      - NAME=miner2
+      - GENESIS=true
+    networks:
+      beamcoinnet:
+        ipv4_address: 10.5.0.2
+    volumes:
+      - /tmp/miner2@127.0.0.1-genesis.block:/opt/beamcoin/miner2@127.0.0.1-genesis.block
+  miner3:
+    build: .
+    image: helium/beamcoin
+    container_name: miner3
+    environment:
+      - PORT=8333
+      - NAME=miner3
+      - PEERS=/ip4/10.5.0.2/tcp/8333
+      - GENESIS_BLOCK=miner2@127.0.0.1-genesis.block
+    networks:
+      beamcoinnet:
+        ipv4_address: 10.5.0.3
+    links:
+      - miner2
+    volumes:
+      - /tmp/miner2@127.0.0.1-genesis.block:/opt/beamcoin/miner2@127.0.0.1-genesis.block
+  miner4:
+    build: .
+    image: helium/beamcoin
+    container_name: miner4
+    environment:
+      - PORT=8333
+      - NAME=miner4
+      - PEERS=/ip4/10.5.0.2/tcp/8333
+      - GENESIS_BLOCK=miner2@127.0.0.1-genesis.block
+    networks:
+      beamcoinnet:
+        ipv4_address: 10.5.0.4
+    links:
+      - miner2
+      - miner3
+    volumes:
+      - /tmp/miner2@127.0.0.1-genesis.block:/opt/beamcoin/miner2@127.0.0.1-genesis.block
+  miner5:
+    build: .
+    image: helium/beamcoin
+    container_name: miner5
+    environment:
+      - PORT=8333
+      - NAME=miner5
+      - PEERS=/ip4/10.5.0.2/tcp/8333
+      - GENESIS_BLOCK=miner2@127.0.0.1-genesis.block
+    networks:
+      beamcoinnet:
+        ipv4_address: 10.5.0.5
+    links:
+      - miner2
+      - miner3
+      - miner4
+    volumes:
+      - /tmp/miner2@127.0.0.1-genesis.block:/opt/beamcoin/miner2@127.0.0.1-genesis.block
+
+networks:
+  beamcoinnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
